@@ -1,162 +1,160 @@
 # 5-Stage-MIPS-Project
 
-# Asynchronous FIFO with Clock Domain Crossing (CDC)
+5-Stage Pipelined MIPS Processor in Verilog
+A modular implementation of a 32-bit, 5-stage pipelined MIPS-style processor using Verilog HDL. The project is organized into separate RTL modules for the processor datapath, pipeline registers, control logic, forwarding, and hazard handling, making the design easier to understand, simulate, and extend.
+Overview
+The processor follows the classic five-stage pipeline:
+Stage |	Name |	Main responsibility
+IF	Instruction Fetch	Fetch the instruction using the program counter (PC)
+ID	Instruction Decode	Decode the instruction and read source registers
+EX	Execute	Perform ALU operations and calculate effective addresses
+MEM	Memory Access	Read from or write to data memory
+WB	Write Back	Write the result back to the register file
 
-## Overview
 
-Designed and verified a parameterized-concept, 16-entry × 8-bit asynchronous FIFO using Verilog HDL. The design enables data transfer between independent write and read clock domains using Gray-coded pointers, two-stage synchronizers, and full/empty detection logic.
+Pipeline registers separate adjacent stages so multiple instructions can be in flight simultaneously.
+Architecture
+                 ┌──────────────┐
+                 │ Program      │
+                 │ Counter (PC) │
+                 └──────┬───────┘
+                        ▼
+              ┌──────────────────┐
+              │ IF: Instruction   │
+              │ Fetch + Instr Mem │
+              └────────┬─────────┘
+                       ▼
+                 ┌───────────┐
+                 │  IF/ID    │
+                 └─────┬─────┘
+                       ▼
+              ┌──────────────────┐
+              │ ID: Decode +     │
+              │ Register File    │
+              └────────┬─────────┘
+                       ▼
+                 ┌───────────┐
+                 │  ID/EX    │
+                 └─────┬─────┘
+                       ▼
+              ┌──────────────────┐
+              │ EX: ALU +        │
+              │ Forwarding Muxes │
+              └────────┬─────────┘
+                       ▼
+                 ┌───────────┐
+                 │  EX/MEM   │
+                 └─────┬─────┘
+                       ▼
+              ┌──────────────────┐
+              │ MEM: Data Memory  │
+              └────────┬─────────┘
+                       ▼
+                 ┌───────────┐
+                 │  MEM/WB   │
+                 └─────┬─────┘
+                       ▼
+              ┌──────────────────┐
+              │ WB: Register File │
+              │ Write Back        │
+              └──────────────────┘
+Features and design goals
+- 32-bit datapath.
+- Classic IF, ID, EX, MEM, and WB pipeline stages.
+- Modular RTL design with separate datapath and control modules.
+- ALU and adder modules.
+- Register file, instruction memory, and data memory.
+- Pipeline registers between stages.
+- Forwarding logic to handle supported data dependencies.
+- Hazard detection logic intended to manage pipeline stalls and bubbles.
+- Multiplexer modules for datapath selection.
+- Designed for simulation and synthesis exploration in Xilinx Vivado.
+Implementation note: Confirm the supported instruction subset, branch/jump behavior, reset semantics, forwarding cases, and load-use stall behavior against the current RTL and testbenches before describing them as fully verified.
 
-The project focuses on RTL design fundamentals, clock domain crossing (CDC), FIFO pointer management, and functional verification.
+Repository structure
+MIPS Project/
+├── adder.v
+├── ALU.v
+├── control_unit.v
+├── data_memory.v
+├── ex_mem.v
+├── forwarding.v
+├── hazard_unit.v
+├── id_ex.v
+├── if_id.v
+├── instr_mem.v
+├── mem_wb.v
+├── PC.v
+├── reg_file.v
+├── three_ip_mux_32_bit.v
+├── top.v
+└── two_ip_mux.v
+Module responsibilities
+File	Purpose
+top.v	Top-level integration of processor components
+PC.v	Program counter / instruction address state
+instr_mem.v	Instruction storage and fetch interface
+reg_file.v	Register-file read and write operations
+control_unit.v	Instruction decoding and control-signal generation
+ALU.v	Arithmetic and logical operations
+adder.v	Addition logic used by the datapath
+data_memory.v	Data-memory read and write interface
+if_id.v	IF/ID pipeline register
+id_ex.v	ID/EX pipeline register
+ex_mem.v	EX/MEM pipeline register
+mem_wb.v	MEM/WB pipeline register
+forwarding.v	Forwarding control for dependent instructions
+hazard_unit.v	Hazard detection and pipeline stall/bubble control
+two_ip_mux.v	2-to-1, 32-bit datapath multiplexer
+three_ip_mux_32_bit.v	3-to-1, 32-bit datapath multiplexer
 
-## Features
 
-- 16-entry FIFO with 8-bit data width
-- Independent write and read clocks
-- Binary read/write pointers with an extra wraparound bit
-- Gray-code pointer conversion for CDC
-- Two-stage synchronizers for cross-domain pointer transfer
-- Full and empty flag generation
-- Protection against writes when full and reads when empty
-- Verilog testbench with directed and randomized testing
-- Waveform generation for debugging using GTKWave
+Check the module declarations and signal connections in the source files for the exact interfaces and behavior.
+Pipeline hazards
+Data hazards and forwarding
+A data hazard occurs when an instruction needs a value produced by an earlier instruction that has not yet been written back to the register file. Forwarding can route a result from a later pipeline stage directly to an ALU input, avoiding some stalls.
 
-## Architecture
+Example dependency:
+add $t0, $t1, $t2
+sub $t3, $t0, $t4
+The sub instruction depends on the result of add. With a suitable forwarding path, the result can be supplied without waiting for register write-back.
+Load-use hazards
+A load instruction obtains its data during the MEM stage, later than an arithmetic instruction obtains its ALU result. A directly dependent instruction may therefore require a stall even when forwarding is implemented.
 
-The FIFO consists of a dual-clock storage array, independent read and write control logic, pointer-generation logic, and synchronizer chains.
-
-*Conceptual overview; the actual RTL contains separate write- and read-domain synchronizer chains.*
-
-## Design Details
-
-### 1. FIFO Storage
-
-- Depth: 16 entries
-- Data width: 8 bits
-- Memory declaration: `reg [7:0] mem [0:15];`
-- The write pointer selects the memory location for incoming data.
-- The read pointer selects the memory location for outgoing data.
-
-### 2. Binary and Gray-Code Pointers
-
-The design uses 5-bit binary pointers: four address bits and one additional wraparound bit.
-
-Binary-to-Gray conversion:
-
-```verilog
-assign wgray = wbin ^ (wbin >> 1);
-assign rgray = rbin ^ (rbin >> 1);
-```
-
-Gray code is used for pointer synchronization because only one bit changes during a single-step pointer increment.
-
-### 3. Clock Domain Crossing
-
-The write pointer is synchronized into the read-clock domain, while the read pointer is synchronized into the write-clock domain.
-
-Each crossing uses a two-stage register synchronizer:
-
-```verilog
-always @(posedge rd_clk or negedge rst_n) begin
-    if (!rst_n) begin
-        wgray_r1 <= 5'b00000;
-        wgray_r2 <= 5'b00000;
-    end else begin
-        wgray_r1 <= wgray;
-        wgray_r2 <= wgray_r1;
-    end
-end
-```
-
-A corresponding synchronizer transfers the read pointer into the write-clock domain.
-
-Two-stage synchronizers reduce the probability of metastability propagating into downstream logic. Physical CDC implementation and reset-release behavior require additional validation.
-
-### 4. Empty Detection
-
-The FIFO is empty when the next read pointer matches the synchronized write pointer.
-
-```verilog
-assign empty_next = (rgray_next == wgray_r2);
-```
-
-### 5. Full Detection
-
-For a power-of-two FIFO, the full condition is detected by comparing the next write Gray pointer against the synchronized read Gray pointer with its two most significant bits inverted.
-
-```verilog
-assign full_next =
-    (wgray_next == {~rgray_w2[4:3], rgray_w2[2:0]});
-```
-
-The extra pointer bit distinguishes the wraparound state, allowing the design to distinguish a full FIFO from an empty FIFO even when both pointers address the same memory location.
-
-## Verification
-
-The design is exercised using a Verilog testbench with directed and randomized transactions.
-
-| Test | Purpose |
-|---|---|
-| Reset | Verify the initial empty state and deasserted full flag |
-| Read while empty | Verify that invalid reads are rejected |
-| Fill FIFO | Verify that the FIFO reaches full capacity |
-| Write while full | Verify that overflow is prevented |
-| Ordered readback | Verify data integrity and FIFO ordering |
-| Pointer wraparound | Verify correct pointer behavior across multiple wraps |
-| Simultaneous read/write | Exercise concurrent operations in independent clock domains |
-| Randomized stress | Exercise varying read/write requests and occupancy levels |
-
-The testbench uses a scoreboard to compare accepted reads against previously accepted writes.
-
-## Tools and Technologies
-
-- **Language:** Verilog HDL
-- **Simulation:** Icarus Verilog
-- **Waveform Analysis:** GTKWave
-- **Synthesis and Timing Analysis:** Xilinx Vivado (planned or to be reported after running the relevant flows)
-
-## Running the Simulation
-
-Place `design.v` and `testbench.v` in the same directory.
-
-### Compile
-
-```bash
-iverilog -g2012 -Wall -o fifo_sim design.v testbench.v
-```
-
-### Run
-
-```bash
-vvp fifo_sim
-```
-
-### View waveforms
-
-```bash
-gtkwave tb_async_fifo.vcd
-```
-
-The testbench should report pass/fail results for the directed and randomized tests. Record the final simulation result after running the current versions of both files.
-
-## Key Learning Outcomes
-
-- Implementing FIFO pointer and storage logic in RTL
-- Understanding binary-to-Gray conversion
-- Designing two-stage synchronizers for asynchronous clock domains
-- Deriving full and empty detection conditions
-- Handling independent read and write operations
-- Building self-checking testbenches and scoreboards
-- Debugging RTL using simulation waveforms
-
-## Future Improvements
-
-- Synthesize the design in Vivado and inspect resource utilization.
-- Run static timing analysis with appropriate clock constraints.
-- Review CDC reports and synchronizer implementation.
-- Verify reset assertion and deassertion across both clock domains.
-- Evaluate memory inference and target-specific implementation.
-- Expand randomized testing and test additional clock-frequency ratios.
-
-## Project Status
-
-RTL implementation and functional verification are the primary focus. Synthesis, timing, and CDC results should be added once they have been measured and reviewed in the target tool flow.
+Example:
+lw  $t0, 0($t1)
+add $t2, $t0, $t3
+The hazard unit should detect the dependency, hold the appropriate front-end pipeline state, and insert a bubble when required. Verify the exact behavior in simulation.
+Tools
+- HDL: Verilog
+- Design and simulation: Xilinx Vivado
+- Version control: Git and GitHub
+Optional command-line simulation may be performed with Icarus Verilog if the source files use compatible Verilog constructs.
+Running the project in Vivado
+1. Open Xilinx Vivado and create or open an RTL project.
+2. Add the processor .v files as Design Sources.
+3. Set top.v as the top module, assuming it contains the top-level processor module.
+4. Add your testbench files as Simulation Sources.
+5. Run Behavioral Simulation.
+6. Inspect the waveform for the PC, fetched instruction, pipeline registers, ALU result, memory controls, forwarding selections, stall signals, and register-file write-back.
+7. Run Synthesis after simulation, then review warnings and utilization reports.
+8. If targeting an FPGA board, add the appropriate constraints and verify the design's clocking and I/O before implementation.
+Suggested verification checklist
+- [ ] Reset initializes the processor to the expected state.
+- [ ] PC advances correctly when the pipeline is not stalled.
+- [ ] Instructions are fetched from the expected addresses.
+- [ ] ALU operations produce the expected results.
+- [ ] Register-file reads and writes behave correctly; register zero remains zero if required by the ISA subset.
+- [ ] Load and store instructions access the correct addresses.
+- [ ] Back-to-back dependent arithmetic instructions are tested.
+- [ ] EX/MEM and MEM/WB forwarding cases are tested.
+- [ ] Load-use dependencies produce the expected stall and bubble.
+- [ ] Branches and jumps are tested, including flushing if implemented.
+- [ ] Testbenches check expected results automatically.
+- [ ] Synthesis completes without unexplained warnings.
+Future improvements
+- Add more instructions and document the exact supported ISA subset.
+- Expand directed and randomized self-checking testbenches.
+- Add branch prediction or other control-hazard improvements.
+- Measure timing and resource utilization in Vivado.
+- Add a program-loading mechanism and a documented example program.
